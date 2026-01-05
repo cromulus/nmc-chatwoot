@@ -16,9 +16,9 @@ FROM chatwoot/chatwoot:v4.9.1
 # Ensure entrypoint scripts are executable
 RUN chmod +x docker/entrypoints/rails.sh
 
-# Copy our role-based entrypoint and ensure Unix line endings
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
+# Copy our role-based entrypoint alongside the original
+COPY docker-entrypoint.sh docker/entrypoints/role.sh
+RUN sed -i 's/\r$//' docker/entrypoints/role.sh && chmod +x docker/entrypoints/role.sh
 
 # Set default environment
 ENV RAILS_ENV=production \
@@ -27,4 +27,4 @@ ENV RAILS_ENV=production \
 
 EXPOSE 3000
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT ["docker/entrypoints/role.sh"]
