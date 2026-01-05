@@ -1,4 +1,5 @@
 # Unified Chatwoot Dockerfile for Rails and Sidekiq roles
+# Base image: Alpine Linux (use apk, not apt-get)
 # Use CHATWOOT_ROLE environment variable to select: "rails" or "sidekiq"
 #
 # Required environment variables:
