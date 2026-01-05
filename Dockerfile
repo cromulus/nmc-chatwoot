@@ -11,7 +11,7 @@
 #   - NODE_ENV: defaults to "production"
 #   - INSTALLATION_ENV: defaults to "docker"
 
-FROM chatwoot/chatwoot:v4.9.1
+FROM chatwoot/chatwoot:v4.9.1-ce
 
 # Ensure entrypoint scripts are executable
 RUN chmod +x docker/entrypoints/rails.sh
