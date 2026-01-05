@@ -14,7 +14,7 @@
 FROM chatwoot/chatwoot:v4.9.1-ce
 
 # Install curl for healthchecks
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl
 
 # Ensure entrypoint scripts are executable
 RUN chmod +x docker/entrypoints/rails.sh
