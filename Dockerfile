@@ -12,7 +12,7 @@
 #   - NODE_ENV: defaults to "production"
 #   - INSTALLATION_ENV: defaults to "docker"
 
-FROM chatwoot/chatwoot:v4.9.1-ce
+FROM chatwoot/chatwoot:latest-ce
 
 # Install curl for healthchecks
 RUN apk add --no-cache curl
