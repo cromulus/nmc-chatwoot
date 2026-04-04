@@ -4,6 +4,7 @@
 #   - Push to main branch
 #   - Manual workflow dispatch
 #   - Release tags (v*)
+#   - Daily scheduled check for upstream latest-ce updates
 #
 # Images are tagged with:
 #   - latest (on main branch push)
@@ -19,13 +20,103 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  BASE_IMAGE: chatwoot/chatwoot:latest-ce
 
 jobs:
+  resolve-base-image:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    outputs:
+      base_digest: ${{ steps.base.outputs.digest }}
+      should_build: ${{ steps.decision.outputs.should_build }}
+      reason: ${{ steps.decision.outputs.reason }}
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve upstream base image digest
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "${BASE_IMAGE}" --format '{{json .Manifest}}' | jq -r '.digest')"
+
+          if [[ -z "${digest}" || "${digest}" == "null" ]]; then
+            echo "Failed to resolve digest for ${BASE_IMAGE}" >&2
+            exit 1
+          fi
+
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Decide whether this run should build
+        id: decision
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_DIGEST: ${{ steps.base.outputs.digest }}
+          CURRENT_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" != "schedule" ]]; then
+            echo "should_build=true" >> "${GITHUB_OUTPUT}"
+            echo "reason=build requested by ${EVENT_NAME}" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          current_manifest="$(docker buildx imagetools inspect "${CURRENT_IMAGE}:latest" --format '{{json .Manifest}}' 2>/dev/null || true)"
+          if [[ -z "${current_manifest}" ]]; then
+            echo "should_build=true" >> "${GITHUB_OUTPUT}"
+            echo "reason=no existing latest image found" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          current_platform_digest="$(printf '%s' "${current_manifest}" | jq -r '.manifests[]? | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' | head -n1)"
+          if [[ -z "${current_platform_digest}" ]]; then
+            echo "should_build=true" >> "${GITHUB_OUTPUT}"
+            echo "reason=could not resolve current amd64 image digest" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          current_image="$(docker buildx imagetools inspect "${CURRENT_IMAGE}@${current_platform_digest}" --format '{{json .Image}}' 2>/dev/null || true)"
+          current_base_digest="$(printf '%s' "${current_image}" | jq -r '.config.Labels["org.opencontainers.image.base.digest"] // empty')"
+
+          if [[ -z "${current_base_digest}" ]]; then
+            echo "should_build=true" >> "${GITHUB_OUTPUT}"
+            echo "reason=current image is missing recorded base digest" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ "${current_base_digest}" == "${BASE_DIGEST}" ]]; then
+            echo "should_build=false" >> "${GITHUB_OUTPUT}"
+            echo "reason=upstream latest-ce digest unchanged (${BASE_DIGEST})" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "should_build=true" >> "${GITHUB_OUTPUT}"
+          echo "reason=upstream latest-ce changed from ${current_base_digest} to ${BASE_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+      - name: Report decision
+        run: echo "${{ steps.decision.outputs.reason }}"
+
   build-and-push:
+    needs: resolve-base-image
+    if: ${{ needs.resolve-base-image.outputs.should_build == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,14 +149,35 @@ jobs:
             type=sha,prefix=
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.base.name=${{ env.BASE_IMAGE }}
+            org.opencontainers.image.base.digest=${{ needs.resolve-base-image.outputs.base_digest }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          pull: true
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Ping deploy webhook
+        if: ${{ success() && secrets.DEPLOY_WEBHOOK_URL != '' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch }}
+        env:
+          DEPLOY_WEBHOOK_METHOD: ${{ vars.DEPLOY_WEBHOOK_METHOD || 'POST' }}
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -X "${DEPLOY_WEBHOOK_METHOD}" \
+            "${DEPLOY_WEBHOOK_URL}"
