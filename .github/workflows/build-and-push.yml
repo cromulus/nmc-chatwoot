@@ -121,6 +121,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
 
     steps:
       - name: Checkout repository
@@ -166,10 +168,9 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Ping deploy webhook
-        if: ${{ success() && secrets.DEPLOY_WEBHOOK_URL != '' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch }}
+        if: ${{ success() && env.DEPLOY_WEBHOOK_URL != '' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch }}
         env:
           DEPLOY_WEBHOOK_METHOD: ${{ vars.DEPLOY_WEBHOOK_METHOD || 'POST' }}
-          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
         run: |
           set -euo pipefail
           curl \
